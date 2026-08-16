@@ -1,0 +1,10 @@
+Answer the student's question using the
+provided retrieved context.
+
+If the answer cannot be supported by the context, say so clearly.
+
+Retrieved context:
+{context}
+
+Student question:
+{question}

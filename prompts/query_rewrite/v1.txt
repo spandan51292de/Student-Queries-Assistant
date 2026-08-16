@@ -1,0 +1,8 @@
+Rewrite the student's question
+into a clear standalone search query.
+
+Conversation history:
+{history}
+
+Current question:
+{question}

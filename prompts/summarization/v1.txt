@@ -1,0 +1,5 @@
+Summarize the following content
+while preserving important facts, names, dates, and technical details.
+
+Content:
+{content}
