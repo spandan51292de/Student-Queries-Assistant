@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import json
+import ast
 from typing import List, AsyncGenerator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,28 +64,47 @@ class ChatService:
 
         context_str = "\n\n".join(
             [f"--- Context Chunk {i+1} ---\n{doc.page_content}" for i, doc in enumerate(docs)]
-        ) if docs else "No course documents available for this context."
+        ) if docs else "No course documents available."
 
-        history_str = ""
+        history_str = "No previous history."
         if past_messages:
-            history_str = "=== Chat History ===\n"
+            history_str = ""
             for msg in past_messages:
                 role = "Student" if msg.sender == "user" else "Assistant"
                 history_str += f"{role}: {msg.content}\n"
-            history_str += "\n"
 
         system_prompt = f"""You are an expert AI Assistant helping students.
-Use the provided course context below to accurately answer the student's current question.
+You are currently engaged in an ongoing conversation. Below is the chat history and the newly retrieved course context.
 
-{history_str}=== Course Context ===
+=== Chat History ===
+{history_str}
+
+=== Retrieved Course Context ===
 {context_str}
 
 === Student's Current Question ===
 {request.message}
 
+INSTRUCTIONS:
+1. Analyze the Chat History to understand if the Current Question is a follow-up (e.g., asking about "point 6", "this", "explain more").
+2. If the question refers to something in the Chat History, use the history to understand the full context of what the student is asking.
+3. Only use the Retrieved Course Context if it contains relevant facts for the actual intent of the question. If the Vector DB retrieved irrelevant context (e.g., pulling "Section 6" when the user meant "Point 6" from your previous message), IGNORE the Course Context and rely purely on the Chat History.
+
 === Answer ==="""
 
-        answer_text = await asyncio.to_thread(default_llm.generate, system_prompt)
+        raw_response = await asyncio.to_thread(default_llm.generate, system_prompt)
+        
+        answer_text = str(raw_response)
+        
+        if isinstance(raw_response, list) and len(raw_response) > 0:
+            answer_text = raw_response[0].get("text", answer_text)
+        elif isinstance(raw_response, str) and raw_response.strip().startswith("[{"):
+            try:
+                parsed_response = ast.literal_eval(raw_response)
+                if isinstance(parsed_response, list) and len(parsed_response) > 0:
+                    answer_text = parsed_response[0].get("text", answer_text)
+            except (ValueError, SyntaxError):
+                pass
 
         assistant_msg = Message(
             conversation_id=conversation.id, sender="assistant", content=answer_text
@@ -161,25 +181,48 @@ Use the provided course context below to accurately answer the student's current
         yield f"data: {json.dumps(meta_payload)}\n\n"
 
         context_str = "\n\n".join([f"--- Chunk {i+1} ---\n{doc.page_content}" for i, doc in enumerate(docs)])
-        history_str = "".join([f"{'Student' if m.sender == 'user' else 'Assistant'}: {m.content}\n" for m in past_messages])
+        
+        history_str = "No previous history."
+        if past_messages:
+            history_str = ""
+            for msg in past_messages:
+                role = "Student" if msg.sender == "user" else "Assistant"
+                history_str += f"{role}: {msg.content}\n"
         
         system_prompt = f"""You are an expert AI Assistant helping students.
-Use the provided course context below to accurately answer the student's current question.
+You are currently engaged in an ongoing conversation. Below is the chat history and the newly retrieved course context.
 
 === Chat History ===
 {history_str}
-=== Course Context ===
+
+=== Retrieved Course Context ===
 {context_str}
 
 === Student's Current Question ===
 {request.message}
 
+INSTRUCTIONS:
+1. Analyze the Chat History to understand if the Current Question is a follow-up (e.g., asking about "point 6", "this", "explain more").
+2. If the question refers to something in the Chat History, use the history to understand the full context of what the student is asking.
+3. Only use the Retrieved Course Context if it contains relevant facts for the actual intent of the question. If the Vector DB retrieved irrelevant context (e.g., pulling "Section 6" when the user meant "Point 6" from your previous message), IGNORE the Course Context and rely purely on the Chat History.
+
 === Answer ==="""
 
         full_answer = ""
-        async for token in default_llm.astream(system_prompt):
-            full_answer += token
-            token_payload = {"type": "token", "content": token}
+        async for chunk in default_llm.astream(system_prompt):
+            token_str = str(chunk)
+            if isinstance(chunk, list) and len(chunk) > 0:
+                token_str = chunk[0].get("text", "")
+            elif isinstance(chunk, str) and chunk.strip().startswith("[{"):
+                try:
+                    parsed = ast.literal_eval(chunk)
+                    if isinstance(parsed, list) and len(parsed) > 0:
+                        token_str = parsed[0].get("text", "")
+                except (ValueError, SyntaxError):
+                    pass
+                    
+            full_answer += token_str
+            token_payload = {"type": "token", "content": token_str}
             yield f"data: {json.dumps(token_payload)}\n\n"
 
         assistant_msg = Message(conversation_id=conversation.id, sender="assistant", content=full_answer)

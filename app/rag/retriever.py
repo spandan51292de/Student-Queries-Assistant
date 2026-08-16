@@ -2,6 +2,7 @@ import logging
 from typing import List
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
+from qdrant_client.http import models as qdrant_models
 from qdrant_client.models import VectorParams, Distance
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
@@ -30,8 +31,17 @@ class ContextRetriever:
         logger.info(f"Retrieving context for query: '{query}' (course_id={course_id})")
         
         filter_kwargs = {}
-        if course_id:
-            pass 
+        
+
+        if course_id is not None:
+            filter_kwargs["filter"] = qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="metadata.course_id", 
+                        match=qdrant_models.MatchValue(value=course_id)
+                    )
+                ]
+            )
 
         docs = self.vectorstore.similarity_search(
             query=query,
